@@ -18,7 +18,7 @@ on:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       migrations: ${{ steps.diff.outputs.migrations }}
@@ -48,7 +48,7 @@ jobs:
   migrate:
     needs: changes
     if: needs.changes.outputs.migrations == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     concurrency: migrate
     defaults:
@@ -71,7 +71,7 @@ jobs:
     if: >-
       always() && needs.changes.outputs.backend == 'true' &&
       (needs.migrate.result == 'success' || needs.migrate.result == 'skipped')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     concurrency: backend
     defaults:
@@ -96,7 +96,7 @@ jobs:
     if: >-
       always() && needs.changes.outputs.frontend == 'true' &&
       (needs.migrate.result == 'success' || needs.migrate.result == 'skipped')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     concurrency: frontend
     defaults:
