@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { NavLink } from 'react-router-dom'
 import { waitForServer } from './api'
 import { useLang } from './i18n'
 
@@ -18,6 +19,8 @@ const paths = {
   right: 'M9 6l6 6-6 6',
   logout: 'M14 4h5v16h-5M10 8l-4 4 4 4M6 12h10',
   search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4',
+  download: 'M12 4v11M7 10l5 5 5-5M5 20h14',
+  filter: 'M4 7h16M7 12h10M10 17h4',
 }
 
 export function Icon({ name, size = 20 }) {
@@ -58,6 +61,20 @@ export function Header({ wide, onLogout }) {
         </div>
       </div>
     </header>
+  )
+}
+
+// Officer tabs, with page controls (e.g. the date filter) on the right.
+export function OfficerTabs({ children }) {
+  const { t } = useLang()
+  return (
+    <div className="tabs-bar">
+      <nav className="tabs">
+        <NavLink end to="/officer">{t('dashboard')}</NavLink>
+        <NavLink to="/officer/vehicles">{t('vehiclesTab')}</NavLink>
+      </nav>
+      {children}
+    </div>
   )
 }
 

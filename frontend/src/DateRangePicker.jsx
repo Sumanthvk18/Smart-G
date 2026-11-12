@@ -15,7 +15,9 @@ const addDays = (k, n) => {
   d.setDate(d.getDate() + n)
   return toKey(d)
 }
-export const todayKey = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })
+// Before the pilot started, so "All time" covers every submission.
+const ALL_TIME_FROM = '2025-01-01'
+export const todayKey =() => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })
 
 function presets(today) {
   const t = fromKey(today)
@@ -30,6 +32,7 @@ function presets(today) {
       from: toKey(new Date(t.getFullYear(), t.getMonth() - 1, 1)),
       to: toKey(new Date(t.getFullYear(), t.getMonth(), 0)),
     },
+    { id: 'allTime', from: ALL_TIME_FROM, to: today },
   ]
 }
 
@@ -120,7 +123,9 @@ export default function DateRangePicker({ value, onChange }) {
         <Icon name="calendar" size={18} />
         <span className="drp-trigger-text">
           {activePreset && <span className="drp-preset-name">{t(activePreset.id)}</span>}
-          <span className={activePreset ? 'muted' : ''}>{formatRange(value, locale)}</span>
+          {activePreset?.id !== 'allTime' && (
+            <span className={activePreset ? 'muted' : ''}>{formatRange(value, locale)}</span>
+          )}
         </span>
         <Icon name="chevron" size={16} />
       </button>

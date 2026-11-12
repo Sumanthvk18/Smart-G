@@ -14,6 +14,9 @@ class Endpoints:
     list_submissions = "/list_submissions"
     submission_calendar = "/submission_calendar"
     submission_photo = "/submission_photo/{submission_id}"
+    export_submissions = "/export_submissions"
+    list_vehicles = "/list_vehicles"
+    add_vehicle = "/add_vehicle"
 
 
 class ServiceTags:
@@ -33,6 +36,7 @@ class WasteTypes:
 
 class ErrorCodes:
     vehicle_not_found = "vehicle_not_found"
+    vehicle_exists = "vehicle_exists"
     household_not_found = "household_not_found"
     meter_taken = "meter_taken"
     invalid_photo = "invalid_photo"

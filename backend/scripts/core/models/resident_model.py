@@ -1,6 +1,7 @@
+import re
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class VehicleDetails(BaseModel):
@@ -12,9 +13,22 @@ class RegisterHousehold(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
     name: str = Field(min_length=1, max_length=80)
     meter_no: str = Field(min_length=1, max_length=40)
-    mobile: str = Field(pattern=r"^[0-9+ -]{10,15}$")
+    mobile: str
     street: str = Field(min_length=1, max_length=100)
     address: str = Field(min_length=1, max_length=200)
+
+    @field_validator("mobile")
+    @classmethod
+    def indian_mobile(cls, value):
+        """Accepts 9876543210, +91 98765 43210 or 09876543210; stores the 10 digits."""
+        digits = re.sub(r"\D", "", value)
+        if len(digits) == 12 and digits.startswith("91"):
+            digits = digits[2:]
+        elif len(digits) == 11 and digits.startswith("0"):
+            digits = digits[1:]
+        if not re.fullmatch(r"[6-9][0-9]{9}", digits):
+            raise ValueError("Enter a 10-digit Indian mobile number")
+        return digits
 
 
 class HouseholdByMeter(BaseModel):

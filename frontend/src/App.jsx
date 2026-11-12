@@ -6,6 +6,7 @@ import { LangProvider, useLang } from './i18n'
 import Dashboard from './pages/Dashboard'
 import OfficerLogin from './pages/OfficerLogin'
 import Scan from './pages/Scan'
+import Vehicles from './pages/Vehicles'
 
 function Home() {
   const { t } = useLang()
@@ -19,10 +20,16 @@ function Home() {
   )
 }
 
-// officer: null = not checked yet (the dashboard's first request tells us), true, false
+// officer: null = not checked yet (the tab's first request tells us), true, false
 function Officer({ officer, setOfficer }) {
   if (officer === false) return <OfficerLogin onLoggedIn={() => setOfficer(true)} />
-  return <Dashboard onAuthed={() => setOfficer(true)} onLoggedOut={() => setOfficer(false)} />
+  const session = { onAuthed: () => setOfficer(true), onLoggedOut: () => setOfficer(false) }
+  return (
+    <Routes>
+      <Route path="vehicles" element={<Vehicles {...session} />} />
+      <Route path="*" element={<Dashboard {...session} />} />
+    </Routes>
+  )
 }
 
 function Layout() {
@@ -41,7 +48,7 @@ function Layout() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/s/:code" element={<ServerGate><Scan /></ServerGate>} />
-          <Route path="/officer"
+          <Route path="/officer/*"
             element={<ServerGate><Officer officer={officer} setOfficer={setOfficer} /></ServerGate>} />
           <Route path="*" element={<Home />} />
         </Routes>

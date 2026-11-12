@@ -1,12 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, AuthError } from '../api'
-import { Icon, Notice, Spinner } from '../components'
+import { Icon, Notice, OfficerTabs, Spinner } from '../components'
 import DateRangePicker, { todayKey } from '../DateRangePicker'
 import { useLang } from '../i18n'
 
 const WASTE_TYPES = ['wet', 'dry', 'mixed']
 const PAGE_SIZES = [10, 20, 50, 100]
 const ROW_HEIGHT = 61
+const NO_FILTERS = { waste_type: '', gps: '', street: '', vehicle_no: '' }
+const PHONE = '(max-width: 640px)'
 
 // "Auto": as many rows as fit the screen height, between 10 and 50.
 const autoPageSize = () => Math.min(50, Math.max(10, Math.floor((window.innerHeight - 220) / ROW_HEIGHT)))
@@ -28,7 +30,6 @@ function rich(template, vars) {
     return key ? <strong key={i}>{vars[key]}</strong> : part
   })
 }
-const NO_FILTERS = { waste_type: '', gps: '', street: '', vehicle_no: '' }
 
 const formatTime = (iso, withDate) =>
   new Date(iso).toLocaleString('en-IN', {
@@ -47,8 +48,20 @@ function useDebounced(value, ms = 300) {
   return debounced
 }
 
+function useIsPhone() {
+  const [phone, setPhone] = useState(() => window.matchMedia(PHONE).matches)
+  useEffect(() => {
+    const query = window.matchMedia(PHONE)
+    const onChange = () => setPhone(query.matches)
+    query.addEventListener('change', onChange)
+    return () => query.removeEventListener('change', onChange)
+  }, [])
+  return phone
+}
+
 export default function Dashboard({ onAuthed, onLoggedOut }) {
   const { t } = useLang()
+  const phone = useIsPhone()
   const [range, setRange] = useState(() => ({ from: todayKey(), to: todayKey() }))
   const [summary, setSummary] = useState(null)
   const [list, setList] = useState(null)
@@ -60,7 +73,16 @@ export default function Dashboard({ onAuthed, onLoggedOut }) {
   const limit = pageSize === 'auto' ? autoSize : pageSize
   const [selected, setSelected] = useState(null)
   const [error, setError] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const searchQuery = useDebounced(search.trim())
+
+  // Same filters for the list and the CSV export.
+  const query = {
+    date_from: range.from,
+    date_to: range.to,
+    search: searchQuery || null,
+    ...Object.fromEntries(Object.entries(filters).map(([k, v]) => [k, v || null])),
+  }
 
   // Any request can find the session expired.
   async function load(path, body, setter) {
@@ -83,20 +105,38 @@ export default function Dashboard({ onAuthed, onLoggedOut }) {
   }, [range])
 
   useEffect(() => {
-    load('/list_submissions', {
-      date_from: range.from,
-      date_to: range.to,
-      search: searchQuery || null,
-      ...Object.fromEntries(Object.entries(filters).map(([k, v]) => [k, v || null])),
-      page,
-      limit,
-    }, setList)
+    load('/list_submissions', { ...query, page, limit }, setList)
   }, [range, searchQuery, filters, page, limit])
+
+  async function exportCsv() {
+    setExporting(true)
+    try {
+      const res = await fetch('/api/export_submissions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(query),
+        credentials: 'same-origin',
+      })
+      if (res.status === 401) return onLoggedOut()
+      if (!res.ok) throw new Error()
+      const name = res.headers.get('Content-Disposition')?.match(/filename="(.+)"/)?.[1] || 'submissions.csv'
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(await res.blob())
+      link.download = name
+      link.click()
+      URL.revokeObjectURL(link.href)
+    } catch {
+      setError(true)
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const setFilter = (key, value) => {
     setFilters((f) => ({ ...f, [key]: value }))
     setPage(1)
   }
+  const toggleFilter = (key, value) => setFilter(key, filters[key] === value ? '' : value)
   const clearAll = () => {
     setFilters(NO_FILTERS)
     setSearch('')
@@ -104,29 +144,53 @@ export default function Dashboard({ onAuthed, onLoggedOut }) {
   }
 
   if (!summary) {
-    return <div className="card center-card">{error ? <Notice>{t('genericError')}</Notice> : <Spinner />}</div>
+    return (
+      <div className="dashboard">
+        <OfficerTabs />
+        <div className="card center-card">{error ? <Notice>{t('genericError')}</Notice> : <Spinner />}</div>
+      </div>
+    )
   }
 
   const multiDay = range.from !== range.to
   const maxStreet = Math.max(1, ...summary.streets.map((s) => s.count))
-  const facets = list?.facets
   const anyFilter = search.trim() || Object.values(filters).some(Boolean)
   const from = list && list.total ? (list.page - 1) * limit + 1 : 0
   const to = list ? from + list.bodyContent.length - (from ? 1 : 0) : 0
   const totalPages = list ? Math.max(1, Math.ceil(list.total / limit)) : 1
 
-  // Keep the current choice in the dropdown even if it has no data in this range.
+  // Keep the current choice listed even if it has no data in this date range.
   const withCurrent = (options, current) =>
     current && !options.some((o) => o.toLowerCase() === current.toLowerCase()) ? [current, ...options] : options
-  const streetOptions = withCurrent(summary.streets.map((s) => s.street), filters.street)
-  const vehicleOptions = withCurrent(summary.vehicles.map((v) => v.vehicle_no), filters.vehicle_no)
+  const gpsLabel = (v) => t(v === 'with' ? 'withGps' : 'noGps')
+  const filterGroups = [
+    {
+      key: 'waste_type', label: t('wasteType'), any: t('anyWaste'),
+      options: WASTE_TYPES.map((w) => ({ value: w, label: t(w), dot: true })),
+      tag: (v) => t(v),
+    },
+    {
+      key: 'gps', label: t('col_gps'), any: t('anyGps'),
+      options: ['with', 'without'].map((v) => ({ value: v, label: gpsLabel(v) })),
+      tag: gpsLabel,
+    },
+    {
+      key: 'street', label: t('col_street'), any: t('anyStreet'),
+      options: withCurrent(summary.streets.map((x) => x.street), filters.street).map((v) => ({ value: v, label: v })),
+      tag: (v) => `${t('col_street')}: ${v}`,
+    },
+    {
+      key: 'vehicle_no', label: t('col_vehicle_no'), any: t('anyVehicle'),
+      options: withCurrent(summary.vehicles.map((x) => x.vehicle_no), filters.vehicle_no).map((v) => ({ value: v, label: v })),
+      tag: (v) => `${t('col_vehicle_no')}: ${v}`,
+    },
+  ]
 
   return (
     <div className="dashboard">
-      <div className="dash-head">
-        <h1>{t('dashboard')}</h1>
+      <OfficerTabs>
         <DateRangePicker value={range} onChange={(r) => { setRange(r); setPage(1) }} />
-      </div>
+      </OfficerTabs>
 
       {error && <Notice>{t('genericError')}</Notice>}
 
@@ -134,8 +198,10 @@ export default function Dashboard({ onAuthed, onLoggedOut }) {
         <Stat label={t('households')} value={summary.households} />
         <Stat label={t('submissions')} value={summary.submissions}
           sub={t('householdsCovered', { n: summary.households_covered })} />
-        <Stat label={t('withGps')} value={summary.with_gps} />
-        <Stat label={t('noGps')} value={summary.no_gps} warn={summary.no_gps > 0} />
+        <Stat label={t('withGps')} value={summary.with_gps}
+          active={filters.gps === 'with'} onClick={() => toggleFilter('gps', 'with')} />
+        <Stat label={t('noGps')} value={summary.no_gps} warn={summary.no_gps > 0}
+          active={filters.gps === 'without'} onClick={() => toggleFilter('gps', 'without')} />
       </div>
 
       <div className="two-col">
@@ -143,8 +209,7 @@ export default function Dashboard({ onAuthed, onLoggedOut }) {
           <h2>{t('byWaste')}</h2>
           {WASTE_TYPES.map((w) => (
             <BarRow key={w} label={t(w)} count={summary[w]} max={Math.max(1, summary.submissions)} kind={w}
-              active={filters.waste_type === w}
-              onClick={() => setFilter('waste_type', filters.waste_type === w ? '' : w)} />
+              active={filters.waste_type === w} onClick={() => toggleFilter('waste_type', w)} />
           ))}
         </section>
         <section className="card">
@@ -160,83 +225,87 @@ export default function Dashboard({ onAuthed, onLoggedOut }) {
         </section>
       </div>
 
-      <section className="card">
+      <section className="card submissions">
         <div className="table-head">
           <h2>{t('submissions')}{list && <span className="count-badge">{list.total}</span>}</h2>
-          <label className="search">
-            <Icon name="search" size={18} />
-            <input type="search" placeholder={t('searchAll')} value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(1) }} />
-          </label>
+          <div className="table-tools">
+            <label className="search">
+              <Icon name="search" size={18} />
+              <input type="search" placeholder={t('searchAll')} value={search}
+                onChange={(e) => { setSearch(e.target.value); setPage(1) }} />
+            </label>
+            <FilterMenu groups={filterGroups} value={filters} onChange={setFilter} onClear={clearAll} />
+          </div>
         </div>
 
-        <div className="filter-bar">
-          <ChipGroup label={t('col_waste_type')} value={filters.waste_type} onChange={(v) => setFilter('waste_type', v)}
-            options={[
-              { value: '', label: t('all'), count: facets?.waste_type.all },
-              ...WASTE_TYPES.map((w) => ({ value: w, label: t(w), count: facets?.waste_type[w], kind: w })),
-            ]} />
-          <ChipGroup label={t('col_gps')} value={filters.gps} onChange={(v) => setFilter('gps', v)}
-            options={[
-              { value: '', label: t('all'), count: facets?.gps.all },
-              { value: 'with', label: t('withGps'), count: facets?.gps.with },
-              { value: 'without', label: t('noGps'), count: facets?.gps.without },
-            ]} />
-          <select value={filters.street} onChange={(e) => setFilter('street', e.target.value)}
-            className={filters.street ? 'active' : ''} aria-label={t('col_street')}>
-            <option value="">{t('allStreets')}</option>
-            {streetOptions.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-          <select value={filters.vehicle_no} onChange={(e) => setFilter('vehicle_no', e.target.value)}
-            className={filters.vehicle_no ? 'active' : ''} aria-label={t('col_vehicle_no')}>
-            <option value="">{t('allVehicles')}</option>
-            {vehicleOptions.map((v) => <option key={v} value={v}>{v}</option>)}
-          </select>
-          {anyFilter && <button className="link-btn clear-btn" onClick={clearAll}>{t('clearFilters')}</button>}
-        </div>
+        {anyFilter && (
+          <div className="filter-bar">
+            {filterGroups.filter((g) => filters[g.key]).map((g) => (
+              <FilterTag key={g.key} label={g.tag(filters[g.key])} onRemove={() => setFilter(g.key, '')} />
+            ))}
+            <button className="link-btn clear-btn" onClick={clearAll}>{t('clearFilters')}</button>
+          </div>
+        )}
 
         {!list ? (
           <p className="muted">{t('loading')}</p>
         ) : list.bodyContent.length === 0 ? (
           <p className="muted empty">{anyFilter ? t('noResults') : t('noDataRange')}</p>
+        ) : phone ? (
+          <ul className="sub-list">
+            {list.bodyContent.map((row) => (
+              <li key={row.id}>
+                <button type="button" className="sub-item" onClick={() => setSelected(row)}>
+                  <span className="sub-main">
+                    <strong>{row.name}</strong>
+                    <span>{row.street}</span>
+                  </span>
+                  <span className="sub-side">
+                    <span className="sub-time">{formatTime(row.created_at, multiDay)}</span>
+                    <WastePill type={row.waste_type} />
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
         ) : (
-          <>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>{list.headerContent.map((h) => <th key={h.key}>{t(`col_${h.key}`)}</th>)}</tr>
-                </thead>
-                <tbody>
-                  {list.bodyContent.map((row) => (
-                    <tr key={row.id} onClick={() => setSelected(row)} tabIndex={0}
-                      onKeyDown={(e) => e.key === 'Enter' && setSelected(row)}>
-                      {list.headerContent.map((h) => (
-                        <td key={h.key}><Cell column={h.key} row={row} multiDay={multiDay} /></td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>{list.headerContent.map((h) => <th key={h.key}>{t(`col_${h.key}`)}</th>)}</tr>
+              </thead>
+              <tbody>
+                {list.bodyContent.map((row) => (
+                  <tr key={row.id} onClick={() => setSelected(row)} tabIndex={0}
+                    onKeyDown={(e) => e.key === 'Enter' && setSelected(row)}>
+                    {list.headerContent.map((h) => (
+                      <td key={h.key} className={`col-${h.key}`}>
+                        <Cell column={h.key} row={row} multiDay={multiDay} />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
 
         {list && list.total > 0 && (
           <div className="pager">
             <div className="pager-info">
-              <span className="pager-showing">
-                {rich(t('showing'), { from, to, total: list.total })}
-              </span>
-              <label className="pager-size">
-                <span>{t('rowsPerPage')}</span>
-                <select value={pageSize} onChange={(e) => {
-                  setPageSize(e.target.value === 'auto' ? 'auto' : Number(e.target.value))
-                  setPage(1)
-                }}>
-                  <option value="auto">{t('auto')}</option>
-                  {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
-                </select>
-              </label>
+              <span className="pager-showing">{rich(t('showing'), { from, to, total: list.total })}</span>
+              {!phone && (
+                <label className="pager-size">
+                  <span>{t('rowsPerPage')}</span>
+                  <select value={pageSize} onChange={(e) => {
+                    setPageSize(e.target.value === 'auto' ? 'auto' : Number(e.target.value))
+                    setPage(1)
+                  }}>
+                    <option value="auto">{t('auto')}</option>
+                    {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </label>
+              )}
             </div>
             {totalPages > 1 && (
               <nav className="pager-pages" aria-label={t('pagination')}>
@@ -256,6 +325,9 @@ export default function Dashboard({ onAuthed, onLoggedOut }) {
                 </button>
               </nav>
             )}
+            <button className="btn btn-secondary btn-small export-btn" onClick={exportCsv} disabled={exporting}>
+              <Icon name="download" size={16} />{exporting ? t('exporting') : t('exportCsv')}
+            </button>
           </div>
         )}
       </section>
@@ -265,14 +337,18 @@ export default function Dashboard({ onAuthed, onLoggedOut }) {
   )
 }
 
-function Stat({ label, value, sub, warn }) {
-  return (
-    <div className={`stat ${warn ? 'stat-warn' : ''}`}>
+function Stat({ label, value, sub, warn, active, onClick }) {
+  const className = `stat ${warn ? 'stat-warn' : ''} ${active ? 'active' : ''}`
+  const body = (
+    <>
       <span className="stat-label">{label}</span>
       <span className="stat-value">{value}</span>
       {sub && <span className="stat-sub">{sub}</span>}
-    </div>
+    </>
   )
+  return onClick
+    ? <button type="button" className={`${className} stat-btn`} onClick={onClick} aria-pressed={active}>{body}</button>
+    : <div className={className}>{body}</div>
 }
 
 function BarRow({ label, count, max, kind, active, onClick }) {
@@ -285,19 +361,88 @@ function BarRow({ label, count, max, kind, active, onClick }) {
   )
 }
 
-function ChipGroup({ label, options, value, onChange }) {
+// Filter button with a panel: each filter shows its current value; tapping it lists the options.
+function FilterMenu({ groups, value, onChange, onClear }) {
+  const { t } = useLang()
+  const [open, setOpen] = useState(false)
+  const [groupKey, setGroupKey] = useState(null)
+  const box = useRef(null)
+
+  useEffect(() => {
+    if (!open) return setGroupKey(null)
+    const onDown = (e) => box.current && !box.current.contains(e.target) && setOpen(false)
+    const onKey = (e) => e.key === 'Escape' && setOpen(false)
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const activeCount = groups.filter((g) => value[g.key]).length
+  const group = groups.find((g) => g.key === groupKey)
+  const current = (g) => g.options.find((o) => o.value === value[g.key])?.label || g.any
+
   return (
-    <div className="chip-group" role="group" aria-label={label}>
-      {options.map((o) => (
-        <button key={o.value} type="button" aria-pressed={value === o.value}
-          className={`chip-btn ${o.kind ? `waste-${o.kind}` : ''} ${value === o.value ? 'on' : ''}`}
-          onClick={() => onChange(o.value)}>
-          {o.kind && <span className="dot" />}
-          {o.label}
-          {o.count != null && <span className="chip-count">{o.count}</span>}
-        </button>
-      ))}
+    <div className="filter-menu" ref={box}>
+      <button type="button" className={`filter-btn ${activeCount ? 'on' : ''}`} onClick={() => setOpen(!open)}
+        aria-expanded={open} aria-label={t('filters')}>
+        <Icon name="filter" />
+        {activeCount > 0 && <span className="filter-count">{activeCount}</span>}
+      </button>
+      {open && (
+        <div className="filter-pop" role="dialog" aria-label={t('filters')}>
+          {!group ? (
+            <>
+              {groups.map((g) => (
+                <button key={g.key} type="button" className="filter-row" onClick={() => setGroupKey(g.key)}>
+                  <span>
+                    <strong>{g.label}</strong>
+                    <span className={value[g.key] ? 'filter-value on' : 'filter-value'}>{current(g)}</span>
+                  </span>
+                  <Icon name="right" size={16} />
+                </button>
+              ))}
+              {activeCount > 0 && (
+                <button type="button" className="link-btn filter-clear" onClick={() => { onClear(); setOpen(false) }}>
+                  {t('clearFilters')}
+                </button>
+              )}
+            </>
+          ) : (
+            <>
+              <button type="button" className="filter-back" onClick={() => setGroupKey(null)}>
+                <Icon name="left" size={16} />{group.label}
+              </button>
+              <div className="filter-options">
+                {[{ value: '', label: group.any }, ...group.options].map((o) => {
+                  const on = (value[group.key] || '') === o.value
+                  return (
+                    <button key={o.value || 'any'} type="button" className={`filter-option ${on ? 'on' : ''}`}
+                      aria-pressed={on} onClick={() => { onChange(group.key, o.value); setGroupKey(null) }}>
+                      {o.dot && <span className={`dot waste-${o.value}`} />}
+                      <span>{o.label}</span>
+                      {on && <Icon name="check" size={16} />}
+                    </button>
+                  )
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
+  )
+}
+
+function FilterTag({ label, onRemove }) {
+  const { t } = useLang()
+  return (
+    <span className="filter-tag">
+      {label}
+      <button type="button" onClick={onRemove} aria-label={t('close')}><Icon name="close" size={14} /></button>
+    </span>
   )
 }
 
@@ -333,10 +478,11 @@ function Details({ row, onClose }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
+  const mobile = row.mobile.replace(/\D/g, '').slice(-10) // older rows may hold "+91 …"
   const items = [
     [t('col_time'), new Date(row.created_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' })],
     [t('col_name'), row.name],
-    [t('mobile'), row.mobile],
+    [t('mobile'), <a href={`tel:+91${mobile}`}>+91 {mobile}</a>],
     [t('col_meter_no'), row.meter_no],
     [t('col_street'), row.street],
     [t('address'), row.address],

@@ -21,15 +21,23 @@ class DashboardSummary(DateRange):
     pass
 
 
-class ListSubmissions(DateRange):
+class SubmissionFilters(DateRange):
     model_config = ConfigDict(str_strip_whitespace=True)
     search: Optional[str] = Field(default=None, max_length=100)
     waste_type: Optional[Literal["wet", "dry", "mixed"]] = None
     gps: Optional[Literal["with", "without"]] = None
     street: Optional[str] = Field(default=None, max_length=100)
     vehicle_no: Optional[str] = Field(default=None, max_length=20)
+
+
+class ListSubmissions(SubmissionFilters):
     page: int = Field(default=1, ge=1)
     limit: int = Field(default=20, ge=1, le=100)
+
+
+class AddVehicle(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    vehicle_no: str = Field(min_length=4, max_length=20, pattern=r"^[A-Za-z0-9 -]+$")
 
 
 class SubmissionCalendar(BaseModel):

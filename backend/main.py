@@ -12,13 +12,13 @@ from scripts.constants.app_constants import ErrorCodes, failed
 from scripts.core.services.officer_service import OfficerService
 from scripts.core.services.resident_service import ResidentService
 from scripts.logging.log_module import logger
-from scripts.utils.db import create_tables
+from scripts.utils.db import init_db
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting up and preparing the database")
-    create_tables()
+    init_db()
     yield
 
 

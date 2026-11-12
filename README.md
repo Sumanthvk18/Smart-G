@@ -36,6 +36,8 @@ npm run dev                       # http://localhost:5173/s/V1
 
 Tables and the demo vehicle are created automatically when the backend starts.
 
+Database changes go in `backend/migrations/` as new numbered files (`002_add_x.sql`, …). Never edit a file that has already run. `python migrate.py` applies pending files, and the backend also applies them on startup.
+
 ## Deploy
 
 ### 1. Neon (database)
@@ -55,13 +57,42 @@ Tables and the demo vehicle are created automatically when the backend starts.
    - `OFFICER_EMAIL`: officer login email
    - `OFFICER_PASSWORD`: officer login password
 4. Deploy, then open `https://<service>.onrender.com/api/health` and check it returns `"status": "success"`.
+5. Settings → Auto-Deploy: **Off**. GitHub Actions triggers deploys (see "Auto-deploy" below).
 
 ### 3. Netlify (frontend)
 1. Edit `frontend/public/_redirects`: replace `YOUR-RENDER-SERVICE` with the Render service name, then commit.
-2. Add new site → import this repo. `netlify.toml` already sets the base folder, build command and publish folder.
+2. Build once locally (`cd frontend && npm run build`), then in Netlify: Add new project → Deploy manually → drop the `frontend/dist` folder. Don't import the repo: Netlify would then build every push itself, and pushes would cost credits twice.
 3. Open `https://<site>.netlify.app/s/V1` on a phone.
 
 Netlify forwards `/api/*` to Render, so the browser treats the backend as the same site. The officer login cookie therefore works on iPhones too, and no CORS setup is needed.
+
+### Auto-deploy (GitHub Actions)
+
+`.github/workflows/deploy.yml` runs on every push to `main` and deploys only what changed:
+
+| Changed | What runs |
+|---|---|
+| `backend/migrations/**` | migrations on Neon, before anything else deploys |
+| other `backend/**` | import check, then Render deploy hook |
+| `frontend/**` | build in Actions, then upload to Netlify |
+
+If a migration fails, nothing deploys. Pushes that only change docs or `qr/` don't start the workflow. To deploy everything, open the Actions tab and choose Deploy → Run workflow.
+
+Repo secrets (Settings → Secrets and variables → Actions):
+
+| Secret | Where to find it |
+|---|---|
+| `DATABASE_URL` | Neon connection string (same as on Render) |
+| `RENDER_DEPLOY_HOOK_URL` | Render service → Settings → Deploy Hook |
+| `NETLIFY_AUTH_TOKEN` | Netlify → User settings → Applications → Personal access tokens |
+| `NETLIFY_SITE_ID` | Netlify project → Project configuration → Project ID |
+
+Free-plan limits to watch:
+
+- **Netlify** (tightest): 300 credits a month. Each production deploy costs 15, so about 20 frontend deploys a month. Bandwidth and requests also use credits, and the `/api` proxy counts too, including photos. When credits run out, the site pauses until next month. Group frontend changes into fewer pushes, or add `[skip ci]` to a commit message to skip deploying it. Usage: Netlify → Team → Usage & billing.
+- **Render**: 500 build minutes a month. Each deploy takes a few minutes.
+- **GitHub Actions**: free for this public repo.
+- **Neon**: a migration run wakes the database for a few seconds.
 
 ### 4. QR code
 ```bash
@@ -69,6 +100,8 @@ pip install "qrcode[pil]"
 python qr/make_qr.py https://<site>.netlify.app/s/V1
 ```
 Print `qr/vehicle-V1.png` and stick it on the vehicle.
+
+More vehicles: in the officer dashboard, open **Vehicles & QR**, add the vehicle number, then print or download its QR code. Codes run V2, V3, …
 
 ## Before the demo
 

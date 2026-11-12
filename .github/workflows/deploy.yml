@@ -1,0 +1,119 @@
+# Deploys on every push to main, but only the parts that changed:
+#   backend/migrations/**  -> run migrations on Neon
+#   backend/** (other)     -> check the app imports, then trigger a Render deploy
+#   frontend/**            -> build here, upload to Netlify (15 of 300 free credits per deploy)
+# Pushes that only touch README, qr/ etc. don't start the workflow at all.
+# Add [skip ci] to a commit message to skip deploying it.
+# "Run workflow" on the Actions tab deploys everything.
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - "backend/**"
+  workflow_dispatch:
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      migrations: ${{ steps.diff.outputs.migrations }}
+      backend: ${{ steps.diff.outputs.backend }}
+      frontend: ${{ steps.diff.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            files=$(git ls-files)
+          else
+            files=$(git diff --name-only "$BEFORE" HEAD)
+          fi
+          echo "$files"
+          yes_no() { if "$@"; then echo true; else echo false; fi; }
+          echo "migrations=$(yes_no grep -q '^backend/migrations/' <<< "$files")" >> "$GITHUB_OUTPUT"
+          echo "backend=$(grep '^backend/' <<< "$files" | yes_no grep -qv '^backend/migrations/')" >> "$GITHUB_OUTPUT"
+          echo "frontend=$(yes_no grep -q '^frontend/' <<< "$files")" >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
+  migrate:
+    needs: changes
+    if: needs.changes.outputs.migrations == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency: migrate
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: backend/.python-version
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r requirements.txt
+      - run: python migrate.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+  backend:
+    needs: [changes, migrate]
+    if: >-
+      always() && needs.changes.outputs.backend == 'true' &&
+      (needs.migrate.result == 'success' || needs.migrate.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency: backend
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: backend/.python-version
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r requirements.txt
+      # Catches syntax and import errors here, before they use up Render build minutes.
+      - run: python -c "import main"
+      - name: Trigger Render deploy
+        run: curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" > /dev/null
+      - run: echo "Render deploy started. Watch it at dashboard.render.com." >> "$GITHUB_STEP_SUMMARY"
+
+  frontend:
+    needs: [changes, migrate]
+    if: >-
+      always() && needs.changes.outputs.frontend == 'true' &&
+      (needs.migrate.result == 'success' || needs.migrate.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency: frontend
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: Deploy to Netlify
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: npx --yes netlify-cli@27.17.0 deploy --prod --no-build --dir "$GITHUB_WORKSPACE/frontend/dist"
+      - run: echo "Netlify production deploy used 15 of the 300 free monthly credits." >> "$GITHUB_STEP_SUMMARY"

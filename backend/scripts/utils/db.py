@@ -1,12 +1,16 @@
 import time
 from contextlib import contextmanager
+from pathlib import Path
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
 from scripts.constants.app_configuration import DATABASE_URL, DEMO_VEHICLE_CODE, DEMO_VEHICLE_NO
-from scripts.constants.schemas import TABLES
 from scripts.logging.log_module import logger
+
+MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
+# Any fixed number. Stops the deploy workflow and app startup from migrating at the same time.
+MIGRATION_LOCK_ID = 7_210_001
 
 
 @contextmanager
@@ -26,14 +30,38 @@ def get_cursor():
         conn.close()
 
 
-def create_tables(retries=5):
-    """Create tables and the demo vehicle. Retries because Neon may be waking up."""
+def run_migrations():
+    """Apply the .sql files in migrations/ that have not run yet, in name order.
+
+    All pending files run in one transaction: if one fails, none are applied.
+    Returns the names of the files applied.
+    """
+    applied = []
+    with get_cursor() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(%s)", (MIGRATION_LOCK_ID,))
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            " filename VARCHAR(200) PRIMARY KEY,"
+            " applied_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+        )
+        cur.execute("SELECT filename FROM schema_migrations")
+        done = {row["filename"] for row in cur.fetchall()}
+        for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+            if path.name in done:
+                continue
+            logger.info(f"Applying migration {path.name}")
+            cur.execute(path.read_text(encoding="utf-8"))
+            cur.execute("INSERT INTO schema_migrations (filename) VALUES (%s)", (path.name,))
+            applied.append(path.name)
+    return applied
+
+
+def init_db(retries=5):
+    """Apply pending migrations and add the demo vehicle. Retries because Neon may be waking up."""
     for attempt in range(1, retries + 1):
         try:
+            run_migrations()
             with get_cursor() as cur:
-                for table in TABLES:
-                    logger.info(f"Creating table if missing: {table['table_name']}")
-                    cur.execute(table["query"])
                 cur.execute(
                     "INSERT INTO vehicles (code, vehicle_no) VALUES (%s, %s) "
                     "ON CONFLICT (code) DO UPDATE SET vehicle_no = EXCLUDED.vehicle_no",
