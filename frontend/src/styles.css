@@ -262,6 +262,23 @@ select {
   cursor: pointer;
 }
 
+/* Password with a show/hide eye button inside the field */
+.password-field {
+  position: relative;
+}
+
+.password-field input {
+  padding-right: 48px;
+}
+
+.password-field .icon-btn {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  padding: 8px;
+}
+
 /* Fixed country code in front of the mobile number */
 .input-prefix {
   display: flex;

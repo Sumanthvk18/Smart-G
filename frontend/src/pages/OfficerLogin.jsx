@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { api } from '../api'
-import { Notice } from '../components'
+import { Icon, Notice } from '../components'
 import { useLang } from '../i18n'
 
 export default function OfficerLogin({ onLoggedIn }) {
   const { t } = useLang()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -29,7 +30,14 @@ export default function OfficerLogin({ onLoggedIn }) {
         </div>
         <div className="field">
           <label htmlFor="password">{t('password')}</label>
-          <input id="password" name="password" type="password" autoComplete="current-password" required />
+          <div className="password-field">
+            <input id="password" name="password" type={showPassword ? 'text' : 'password'}
+              autoComplete="current-password" required />
+            <button type="button" className="icon-btn" onClick={() => setShowPassword(!showPassword)}
+              aria-label={t(showPassword ? 'hidePassword' : 'showPassword')} aria-pressed={showPassword}>
+              <Icon name={showPassword ? 'eyeOff' : 'eye'} />
+            </button>
+          </div>
         </div>
         {error && <Notice>{error}</Notice>}
         <button className="btn btn-primary btn-block" disabled={busy}>{busy ? t('loggingIn') : t('login')}</button>
