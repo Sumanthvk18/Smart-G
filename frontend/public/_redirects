@@ -1,0 +1,3 @@
+# Replace YOUR-RENDER-SERVICE with your Render service name before deploying.
+/api/*  https://YOUR-RENDER-SERVICE.onrender.com/api/:splat  200
+/*      /index.html  200
